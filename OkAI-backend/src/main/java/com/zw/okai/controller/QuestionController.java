@@ -14,6 +14,7 @@ import com.zw.okai.constant.UserConstant;
 import com.zw.okai.exception.BusinessException;
 import com.zw.okai.exception.ThrowUtils;
 import com.zw.okai.manager.AiManager;
+import com.zw.okai.manager.RedisLimiterManager;
 import com.zw.okai.model.dto.question.*;
 import com.zw.okai.model.entity.App;
 import com.zw.okai.model.entity.Question;
@@ -60,6 +61,9 @@ public class QuestionController {
 
     @Resource
     private Scheduler vipScheduler;
+
+    @Resource
+    private RedisLimiterManager redisLimiterManager;
 
     //region 增删改查
 
@@ -312,6 +316,13 @@ public class QuestionController {
         return userMessage.toString();
     }
 
+    @PostMapping("/test")
+    public BaseResponse<Void> test() {
+        redisLimiterManager.doRateLimit("aiGenerateQuestion_" + 1);
+        System.out.println("test");
+        return null;
+    }
+
     /**
      * AI生成题目
      * @param aiGenerateQuestionRequest
@@ -330,14 +341,17 @@ public class QuestionController {
         User loginUser = userService.getLoginUser(request);
         ThrowUtils.throwIf(loginUser == null, ErrorCode.NOT_LOGIN_ERROR);
         ThrowUtils.throwIf(app == null, ErrorCode.PARAMS_ERROR, "应用不存在");
+
+        //限流
+        redisLimiterManager.doRateLimit("aiGenerateQuestion_" + loginUser.getId());
         //封装Prompt
         String userMessage = getGenerateQuestionUserMessage(app, questionNumber, optionNumber);
         //调用ai生成题目
         String aiResponse = null;
         if(app.getAppType() == 1){
-            aiResponse = aiManager.doSyncUnstableRequest(GENERATE_TEST_QUESTION_SYSTEM_MESSAGE, userMessage);
+            aiResponse = aiManager.doSyncStableRequest(GENERATE_TEST_QUESTION_SYSTEM_MESSAGE, userMessage);
         }else{
-            aiResponse = aiManager.doSyncUnstableRequest(GENERATE_SCORE_QUESTION_SYSTEM_MESSAGE, userMessage);
+            aiResponse = aiManager.doSyncStableRequest(GENERATE_SCORE_QUESTION_SYSTEM_MESSAGE, userMessage);
         }
         //解析ai返回的json数据
         int start=aiResponse.indexOf("[");
@@ -363,7 +377,7 @@ public class QuestionController {
         // 建立 SSE 连接对象，0 表示不超时
         SseEmitter emitter = new SseEmitter(0L);
         // AI 生成，sse 流式返回
-        Flowable<ModelData> modelDataFlowable = aiManager.doStreamRequest(GENERATE_TEST_QUESTION_SYSTEM_MESSAGE, userMessage, null);
+        Flowable<ModelData> modelDataFlowable = aiManager.doStreamRequest(GENERATE_TEST_QUESTION_SYSTEM_MESSAGE, userMessage, 0.05f);
 
         //默认全局线程池
         Scheduler scheduler = Schedulers.single();
@@ -373,17 +387,24 @@ public class QuestionController {
         }
         StringBuilder contentBuilder = new StringBuilder();
         AtomicInteger flag = new AtomicInteger(0);
+        //对流式数据进行处理
         modelDataFlowable
+                //使用线程池
                 .observeOn(scheduler)
+                //提取出 delta.content 字段 就是获取data数据
                 .map(chunk -> chunk.getChoices().get(0).getDelta().getContent())
+                //去除空白字符
                 .map(message -> message.replaceAll("\\s",""))
+                //过滤掉空白字符
                 .filter(StrUtil::isNotBlank)
+                //将字符串转换为字符流
                 .flatMap(message -> {
                     //将字符串转换为List<Character>
                     List<Character> characters = new ArrayList<>();
                     for (char c : message.toCharArray()) {
                         characters.add(c);
                     }
+                    //将字符转换为流
                     return Flowable.fromIterable(characters);
                 })
                 .doOnNext(c -> {
@@ -406,7 +427,7 @@ public class QuestionController {
                             }
                         }
                     }
-                }).doOnComplete(emitter::complete).subscribe();
+                }).doOnComplete(emitter::complete).subscribe();//监听流式数据是否结束，结束则关闭连接，并开始订阅
 
         return emitter;
 

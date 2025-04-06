@@ -3,6 +3,7 @@ package com.zw.okai.scoring;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.digest.DigestUtil;
 import cn.hutool.json.JSONUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -103,7 +104,6 @@ public class AIScoreScoringStrategy implements ScoringStrategy {
             return userAnswer;
         }
         // 1. 缓存未命中，则从数据库中查询数据，并放入缓存中
-
         RLock lock = redissonClient.getLock(AI_ANSWER_LOCK + cacheKey);
         try {
             // 2. 尝试获取锁，最多等待 3 秒，上锁以后 15 秒自动解锁

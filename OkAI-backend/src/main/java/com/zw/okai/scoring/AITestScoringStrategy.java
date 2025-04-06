@@ -104,6 +104,7 @@ public class AITestScoringStrategy implements ScoringStrategy {
             userAnswer.setChoices(jsonStr);
             return userAnswer;
         }
+        // 1. 获取锁
         RLock lock = redissonClient.getLock(AI_ANSWER_LOCK + cacheKey);
         try {
             // 2. 尝试获取锁，最多等待 3 秒，上锁以后 15 秒自动解锁
